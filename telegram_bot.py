@@ -1,38 +1,105 @@
 import os
 import time
+import json
 import requests
+
+from datetime import datetime
 from google import genai
+from supabase import create_client
 
 
 # =========================================================
-# CONFIGURAÇÕES
+# VARIÁVEIS DE AMBIENTE
 # =========================================================
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN não configurado.")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY não configurado.")
+SUPABASE_BOT_EMAIL = os.environ.get("SUPABASE_BOT_EMAIL")
+SUPABASE_BOT_PASSWORD = os.environ.get("SUPABASE_BOT_PASSWORD")
 
 
-TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+variaveis = {
+    "TELEGRAM_BOT_TOKEN": TELEGRAM_TOKEN,
+    "GEMINI_API_KEY": GEMINI_API_KEY,
+    "SUPABASE_URL": SUPABASE_URL,
+    "SUPABASE_KEY": SUPABASE_KEY,
+    "SUPABASE_BOT_EMAIL": SUPABASE_BOT_EMAIL,
+    "SUPABASE_BOT_PASSWORD": SUPABASE_BOT_PASSWORD,
+}
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+for nome_variavel, valor in variaveis.items():
+    if not valor:
+        raise ValueError(
+            f"{nome_variavel} não configurado."
+        )
 
 
 # =========================================================
-# MEMÓRIA TEMPORÁRIA DAS CONVERSAS
-# Depois vamos substituir pelo Supabase
+# CLIENTES
+# =========================================================
+
+TELEGRAM_URL = (
+    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+)
+
+gemini = genai.Client(
+    api_key=GEMINI_API_KEY
+)
+
+supabase = create_client(
+    SUPABASE_URL,
+    SUPABASE_KEY
+)
+
+
+# =========================================================
+# AUTENTICAÇÃO SUPABASE
+# =========================================================
+
+def autenticar_supabase():
+
+    try:
+
+        resposta = supabase.auth.sign_in_with_password(
+            {
+                "email": SUPABASE_BOT_EMAIL,
+                "password": SUPABASE_BOT_PASSWORD,
+            }
+        )
+
+        if not resposta.session:
+            raise ValueError(
+                "Supabase não retornou sessão."
+            )
+
+        print("Supabase autenticado com sucesso.")
+
+    except Exception as erro:
+
+        print(
+            "Erro ao autenticar no Supabase:",
+            repr(erro)
+        )
+
+        raise
+
+
+# =========================================================
+# MEMÓRIA TEMPORÁRIA
 # =========================================================
 
 conversas = {}
 
+# Impede que a mesma solicitação seja salva várias vezes
+solicitacoes_salvas = set()
+
 
 # =========================================================
-# ENVIO DE MENSAGEM PELO TELEGRAM
+# TELEGRAM
 # =========================================================
 
 def enviar_mensagem(chat_id, texto):
@@ -41,166 +108,436 @@ def enviar_mensagem(chat_id, texto):
         f"{TELEGRAM_URL}/sendMessage",
         json={
             "chat_id": chat_id,
-            "text": texto
+            "text": texto,
         },
-        timeout=30
+        timeout=30,
     )
 
     resposta.raise_for_status()
 
 
 # =========================================================
-# ANÁLISE COM GEMINI
+# LIMPEZA DE JSON
 # =========================================================
 
-def analisar_com_gemini(chat_id, nome, mensagem):
+def limpar_json(texto):
 
-    # Cria histórico para esse cliente
+    texto = texto.strip()
+
+    if texto.startswith("```json"):
+        texto = texto[7:]
+
+    elif texto.startswith("```"):
+        texto = texto[3:]
+
+    if texto.endswith("```"):
+        texto = texto[:-3]
+
+    return texto.strip()
+
+
+# =========================================================
+# GEMINI - CONVERSA COM O CLIENTE
+# =========================================================
+
+def conversar_com_cliente(
+    chat_id,
+    nome,
+    mensagem
+):
+
     if chat_id not in conversas:
         conversas[chat_id] = []
 
-    # Adiciona mensagem atual
     conversas[chat_id].append(
-        f"Cliente: {mensagem}"
+        {
+            "autor": "cliente",
+            "texto": mensagem,
+        }
     )
 
-    # Mantém as últimas mensagens da conversa
     historico = "\n".join(
-        conversas[chat_id][-12:]
+        [
+            f"{item['autor']}: {item['texto']}"
+            for item in conversas[chat_id][-14:]
+        ]
     )
 
     prompt = f"""
 Você é o Assistente Operacional DOPS.
 
-Seu papel é ajudar um prestador de serviços a receber,
-entender e organizar as solicitações enviadas pelos clientes.
+Você conversa diretamente com clientes de um
+prestador de serviços.
 
-Você está conversando diretamente com o cliente pelo Telegram.
+Seu objetivo é entender a solicitação e coletar
+somente as informações necessárias para que o
+profissional possa analisar o atendimento.
 
 Nome do cliente:
 {nome}
 
-HISTÓRICO DA CONVERSA:
+HISTÓRICO:
 
 {historico}
 
 
-REGRAS OBRIGATÓRIAS:
+REGRAS:
 
-1. Responda sempre em português brasileiro.
+- Responda sempre em português brasileiro.
+- Seja natural, breve, educado e profissional.
+- Não invente informações.
+- Não invente preços.
+- Não determine mão de obra.
+- Não forneça orçamento.
+- Não faça diagnóstico técnico definitivo.
+- Não tome decisões técnicas pelo profissional.
+- Não prometa prazo.
+- Não prometa disponibilidade.
+- Não confirme a execução do serviço.
+- Faça no máximo 3 perguntas por mensagem.
+- Não repita informações que o cliente já informou.
+- Analise todo o histórico.
+- Pergunte somente informações realmente úteis
+  para o profissional avaliar a solicitação.
+- Quando já houver informações suficientes para
+  uma avaliação inicial, não faça novas perguntas.
 
-2. Fale diretamente com o cliente.
-
-3. Use uma linguagem simples, natural, educada e profissional.
-
-4. Não diga que você é Gemini, Google ou uma inteligência
-artificial.
-
-5. Não invente nenhuma informação.
-
-6. Não invente preços.
-
-7. Não determine valor de mão de obra.
-
-8. Não forneça orçamento por conta própria.
-
-9. Não faça diagnóstico técnico definitivo.
-
-10. Não determine que um equipamento precisa obrigatoriamente
-ser substituído ou reparado.
-
-11. Decisões técnicas e comerciais pertencem ao profissional.
-
-12. Seu objetivo inicial é entender o que o cliente precisa
-e coletar as informações necessárias para o profissional
-avaliar a solicitação.
-
-13. Quando faltarem informações importantes, faça perguntas
-objetivas.
-
-14. Faça no máximo 3 perguntas por mensagem.
-
-15. Nunca repita uma pergunta que o cliente já respondeu.
-
-16. Analise todo o histórico antes de perguntar novamente.
-
-17. Se o cliente responder apenas uma das perguntas,
-reconheça a informação e pergunte somente o que ainda estiver
-faltando.
-
-18. Não prometa prazo.
-
-19. Não prometa disponibilidade.
-
-20. Não prometa preço.
-
-21. Não diga que o serviço está confirmado.
-
-22. Não diga que o orçamento está aprovado.
-
-23. Quando já houver informações suficientes para o
-profissional analisar a solicitação, informe ao cliente que
-os dados foram organizados e serão encaminhados para análise
-do profissional.
-
-24. Seja breve. Evite textos muito longos.
-
-25. Não use linguagem excessivamente robótica.
-
-
-EXEMPLO DE CONVERSA:
-
-Cliente:
-"Quero trocar um chuveiro."
-
-Resposta adequada:
-
-"Certo! Para organizar sua solicitação, preciso de algumas
-informações:
-
-1. Em qual bairro será o serviço?
-2. Você sabe se a instalação é 127V ou 220V?
-3. Você já possui o chuveiro novo?"
-
-
-Depois o cliente responde:
-
-"É no Centro, 220V e já tenho o chuveiro."
-
-
-Resposta adequada:
-
-"Perfeito! Já organizei essas informações.
-
-Vou encaminhar sua solicitação para análise do profissional."
-
+Para serviços elétricos simples, informações como
+tipo de serviço, localização aproximada, tensão
+quando relevante e se o cliente já possui o
+equipamento podem ser suficientes para uma
+avaliação inicial.
 
 IMPORTANTE:
 
-Não copie exatamente os exemplos.
-Responda naturalmente de acordo com a conversa real.
+Você deve responder SOMENTE em JSON válido.
 
-Agora responda somente à última mensagem do cliente.
+Formato obrigatório:
+
+{{
+    "concluido": false,
+    "resposta_cliente": "mensagem para o cliente"
+}}
+
+Quando houver informações suficientes:
+
+{{
+    "concluido": true,
+    "resposta_cliente": "Perfeito! Já organizei as informações. Vou encaminhar sua solicitação para análise do profissional."
+}}
+
+Não escreva nada fora do JSON.
 """
 
-    resposta = client.models.generate_content(
+    resposta = gemini.models.generate_content(
         model="gemini-3.6-flash",
-        contents=prompt
+        contents=prompt,
     )
 
     if not resposta.text:
         raise ValueError(
-            "Gemini não retornou uma resposta de texto."
+            "Gemini não retornou texto."
         )
 
-    texto_resposta = resposta.text.strip()
-
-    # Salva também a resposta do DOPS no histórico
-    conversas[chat_id].append(
-        f"DOPS: {texto_resposta}"
+    texto_json = limpar_json(
+        resposta.text
     )
 
-    return texto_resposta
+    dados = json.loads(
+        texto_json
+    )
+
+    resposta_cliente = dados.get(
+        "resposta_cliente"
+    )
+
+    concluido = bool(
+        dados.get("concluido", False)
+    )
+
+    if not resposta_cliente:
+        raise ValueError(
+            "Resposta do cliente não encontrada."
+        )
+
+    conversas[chat_id].append(
+        {
+            "autor": "DOPS",
+            "texto": resposta_cliente,
+        }
+    )
+
+    return concluido, resposta_cliente
+
+
+# =========================================================
+# GEMINI - ESTRUTURAÇÃO PARA O BANCO
+# =========================================================
+
+def estruturar_solicitacao(
+    chat_id,
+    nome
+):
+
+    historico = "\n".join(
+        [
+            f"{item['autor']}: {item['texto']}"
+            for item in conversas.get(
+                chat_id,
+                []
+            )
+        ]
+    )
+
+    prompt = f"""
+Você trabalha na organização operacional do DOPS.
+
+Transforme a conversa abaixo em dados estruturados
+para o profissional analisar.
+
+Cliente:
+{nome}
+
+CONVERSA:
+
+{historico}
+
+
+REGRAS:
+
+- Não invente informações.
+- Não invente preços.
+- Não invente materiais.
+- Não faça diagnóstico técnico.
+- Diferencie pedido do cliente de conclusão técnica.
+- Se uma informação não estiver disponível,
+  use "Não informado".
+- O resumo deve ser curto e objetivo.
+- categoria deve descrever a categoria geral.
+- servico deve descrever o serviço solicitado ou
+  que deverá ser avaliado pelo profissional.
+- localizacao deve usar somente a localização
+  realmente informada pelo cliente.
+
+Responda SOMENTE em JSON válido:
+
+{{
+    "categoria": "",
+    "servico": "",
+    "localizacao": "",
+    "resumo": ""
+}}
+
+Não escreva nada fora do JSON.
+"""
+
+    resposta = gemini.models.generate_content(
+        model="gemini-3.6-flash",
+        contents=prompt,
+    )
+
+    if not resposta.text:
+        raise ValueError(
+            "Gemini não retornou estrutura."
+        )
+
+    texto_json = limpar_json(
+        resposta.text
+    )
+
+    dados = json.loads(
+        texto_json
+    )
+
+    return dados
+
+
+# =========================================================
+# MENSAGEM ORIGINAL
+# =========================================================
+
+def obter_primeira_mensagem_cliente(
+    chat_id
+):
+
+    for item in conversas.get(
+        chat_id,
+        []
+    ):
+
+        if item["autor"] == "cliente":
+            return item["texto"]
+
+    return "Não informado"
+
+
+# =========================================================
+# RESUMO COMPLETO DA CONVERSA
+# =========================================================
+
+def obter_conversa_para_observacoes(
+    chat_id
+):
+
+    partes = []
+
+    for item in conversas.get(
+        chat_id,
+        []
+    ):
+
+        partes.append(
+            f"{item['autor']}: "
+            f"{item['texto']}"
+        )
+
+    return "\n".join(partes)
+
+
+# =========================================================
+# SALVAR NO SUPABASE
+# =========================================================
+
+def salvar_no_supabase(
+    chat_id,
+    nome,
+    dados
+):
+
+    if chat_id in solicitacoes_salvas:
+        print(
+            "Solicitação já salva:",
+            chat_id
+        )
+
+        return
+
+    agora = datetime.now()
+
+    primeira_mensagem = (
+        obter_primeira_mensagem_cliente(
+            chat_id
+        )
+    )
+
+    conversa_completa = (
+        obter_conversa_para_observacoes(
+            chat_id
+        )
+    )
+
+    registro = {
+        "data": agora.strftime(
+            "%d/%m/%Y %H:%M"
+        ),
+
+        "cliente": nome,
+
+        "categoria": dados.get(
+            "categoria",
+            "Não informado",
+        ),
+
+        "servico": dados.get(
+            "servico",
+            "Não informado",
+        ),
+
+        "localizacao": dados.get(
+            "localizacao",
+            "Não informado",
+        ),
+
+        "mensagem_original": primeira_mensagem,
+
+        "resumo": dados.get(
+            "resumo",
+            "Não informado",
+        ),
+
+        "materiais": "",
+
+        "valor_materiais": 0,
+
+        "valor_mao_obra": 0,
+
+        "valor_total": 0,
+
+        "prazo": "",
+
+        "observacoes": (
+            "Origem: Telegram\n\n"
+            + conversa_completa
+        ),
+
+        "status": "Em revisão",
+    }
+
+    resposta = (
+        supabase
+        .table("atendimentos")
+        .insert(registro)
+        .execute()
+    )
+
+    solicitacoes_salvas.add(
+        chat_id
+    )
+
+    print(
+        "Solicitação salva no Supabase."
+    )
+
+    print(
+        "Resposta Supabase:",
+        resposta.data
+    )
+
+
+# =========================================================
+# PROCESSAR MENSAGEM
+# =========================================================
+
+def processar_mensagem(
+    chat_id,
+    nome,
+    texto
+):
+
+    concluido, resposta_cliente = (
+        conversar_com_cliente(
+            chat_id,
+            nome,
+            texto,
+        )
+    )
+
+    if concluido:
+
+        try:
+
+            dados = estruturar_solicitacao(
+                chat_id,
+                nome,
+            )
+
+            salvar_no_supabase(
+                chat_id,
+                nome,
+                dados,
+            )
+
+        except Exception as erro:
+
+            print(
+                "Erro ao salvar solicitação:",
+                repr(erro)
+            )
+
+            # Não expõe erro técnico ao cliente.
+            # A conversa continua preservada.
+
+    return resposta_cliente
 
 
 # =========================================================
@@ -209,11 +546,27 @@ Agora responda somente à última mensagem do cliente.
 
 def iniciar_bot():
 
-    print("======================================")
-    print("DOPS Telegram + Gemini iniciado.")
-    print("Modelo: Gemini 3.6 Flash")
-    print("Aguardando mensagens...")
-    print("======================================")
+    autenticar_supabase()
+
+    print(
+        "======================================"
+    )
+
+    print(
+        "DOPS Telegram + Gemini + Supabase"
+    )
+
+    print(
+        "Modelo: Gemini 3.6 Flash"
+    )
+
+    print(
+        "Aguardando mensagens..."
+    )
+
+    print(
+        "======================================"
+    )
 
     offset = None
 
@@ -231,103 +584,142 @@ def iniciar_bot():
             resposta = requests.get(
                 f"{TELEGRAM_URL}/getUpdates",
                 params=parametros,
-                timeout=35
+                timeout=35,
             )
 
             resposta.raise_for_status()
 
-            dados = resposta.json()
+            dados_telegram = resposta.json()
 
-            for update in dados.get("result", []):
+            for update in dados_telegram.get(
+                "result",
+                []
+            ):
 
-                offset = update["update_id"] + 1
+                offset = (
+                    update["update_id"] + 1
+                )
 
-                mensagem = update.get("message")
+                mensagem = update.get(
+                    "message"
+                )
 
-                # Ignora eventos que não sejam mensagens
                 if not mensagem:
                     continue
 
-                texto = mensagem.get("text")
+                texto = mensagem.get(
+                    "text"
+                )
 
-                # Por enquanto trabalha apenas com texto
                 if not texto:
                     continue
 
-                chat_id = mensagem["chat"]["id"]
+                chat_id = mensagem[
+                    "chat"
+                ]["id"]
 
                 nome = mensagem.get(
-                    "from", {}
+                    "from",
+                    {},
                 ).get(
                     "first_name",
-                    "Cliente"
+                    "Cliente",
                 )
 
-                # =========================================
-                # COMANDO /START
-                # =========================================
+                # -----------------------------------------
+                # /START
+                # -----------------------------------------
 
-                if texto.strip().lower() == "/start":
+                if (
+                    texto.strip().lower()
+                    == "/start"
+                ):
 
-                    # Limpa conversa antiga ao reiniciar
                     conversas[chat_id] = []
+
+                    solicitacoes_salvas.discard(
+                        chat_id
+                    )
 
                     enviar_mensagem(
                         chat_id,
                         f"Olá, {nome}! 👋\n\n"
                         "Sou o assistente de atendimento.\n\n"
-                        "Pode me contar qual serviço você precisa?"
+                        "Pode me contar qual serviço "
+                        "você precisa?",
                     )
 
                     continue
 
-                # =========================================
-                # MOSTRA NO LOG
-                # =========================================
+                # -----------------------------------------
+                # LOG
+                # -----------------------------------------
 
-                print("--------------------------------------")
-                print("Cliente:", nome)
-                print("Chat ID:", chat_id)
-                print("Mensagem:", texto)
+                print(
+                    "--------------------------------------"
+                )
 
-                # =========================================
-                # GEMINI
-                # =========================================
+                print(
+                    "Cliente:",
+                    nome
+                )
+
+                print(
+                    "Chat ID:",
+                    chat_id
+                )
+
+                print(
+                    "Mensagem:",
+                    texto
+                )
+
+                # -----------------------------------------
+                # PROCESSAMENTO
+                # -----------------------------------------
 
                 try:
 
-                    resposta_ia = analisar_com_gemini(
-                        chat_id,
-                        nome,
-                        texto
+                    resposta_dops = (
+                        processar_mensagem(
+                            chat_id,
+                            nome,
+                            texto,
+                        )
                     )
 
                     enviar_mensagem(
                         chat_id,
-                        resposta_ia
+                        resposta_dops,
                     )
 
-                    print("Resposta DOPS:")
-                    print(resposta_ia)
+                    print(
+                        "Resposta DOPS:"
+                    )
+
+                    print(
+                        resposta_dops
+                    )
 
                 except Exception as erro_ia:
 
                     print(
-                        "Erro ao analisar com IA:",
+                        "Erro no processamento:",
                         repr(erro_ia)
                     )
 
                     enviar_mensagem(
                         chat_id,
-                        "Recebi sua solicitação, mas tive "
-                        "um problema ao organizar as informações. "
-                        "Tente novamente em alguns instantes."
+                        "Recebi sua mensagem, mas tive "
+                        "um problema ao organizar as "
+                        "informações. Tente novamente "
+                        "em alguns instantes.",
                     )
 
         except requests.exceptions.HTTPError as erro_http:
 
             print(
-                "Erro HTTP do Telegram:",
+                "Erro HTTP Telegram:",
                 repr(erro_http)
             )
 
@@ -336,7 +728,7 @@ def iniciar_bot():
         except Exception as erro:
 
             print(
-                "Erro geral do Telegram:",
+                "Erro geral:",
                 repr(erro)
             )
 
