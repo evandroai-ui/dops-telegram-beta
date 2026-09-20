@@ -94,7 +94,6 @@ def autenticar_supabase():
 
 conversas = {}
 
-# Impede que a mesma solicitação seja salva várias vezes
 solicitacoes_salvas = set()
 
 
@@ -137,7 +136,7 @@ def limpar_json(texto):
 
 
 # =========================================================
-# GEMINI - CONVERSA COM O CLIENTE
+# CONVERSA COM GEMINI
 # =========================================================
 
 def conversar_com_cliente(
@@ -180,7 +179,6 @@ HISTÓRICO:
 
 {historico}
 
-
 REGRAS:
 
 - Responda sempre em português brasileiro.
@@ -197,22 +195,18 @@ REGRAS:
 - Faça no máximo 3 perguntas por mensagem.
 - Não repita informações que o cliente já informou.
 - Analise todo o histórico.
-- Pergunte somente informações realmente úteis
-  para o profissional avaliar a solicitação.
-- Quando já houver informações suficientes para
-  uma avaliação inicial, não faça novas perguntas.
+- Pergunte somente informações realmente úteis.
+- Quando houver informações suficientes para uma
+  avaliação inicial, não faça novas perguntas.
 
 Para serviços elétricos simples, informações como
 tipo de serviço, localização aproximada, tensão
 quando relevante e se o cliente já possui o
-equipamento podem ser suficientes para uma
-avaliação inicial.
-
-IMPORTANTE:
+equipamento podem ser suficientes.
 
 Você deve responder SOMENTE em JSON válido.
 
-Formato obrigatório:
+Enquanto faltarem informações:
 
 {{
     "concluido": false,
@@ -271,7 +265,7 @@ Não escreva nada fora do JSON.
 
 
 # =========================================================
-# GEMINI - ESTRUTURAÇÃO PARA O BANCO
+# ESTRUTURAÇÃO PARA O BANCO
 # =========================================================
 
 def estruturar_solicitacao(
@@ -302,7 +296,6 @@ CONVERSA:
 
 {historico}
 
-
 REGRAS:
 
 - Não invente informações.
@@ -313,11 +306,11 @@ REGRAS:
 - Se uma informação não estiver disponível,
   use "Não informado".
 - O resumo deve ser curto e objetivo.
-- categoria deve descrever a categoria geral.
-- servico deve descrever o serviço solicitado ou
+- categoria deve representar a categoria geral.
+- servico deve representar o serviço solicitado ou
   que deverá ser avaliado pelo profissional.
-- localizacao deve usar somente a localização
-  realmente informada pelo cliente.
+- localizacao deve conter somente o que o cliente
+  realmente informou.
 
 Responda SOMENTE em JSON válido:
 
@@ -345,15 +338,13 @@ Não escreva nada fora do JSON.
         resposta.text
     )
 
-    dados = json.loads(
+    return json.loads(
         texto_json
     )
 
-    return dados
-
 
 # =========================================================
-# MENSAGEM ORIGINAL
+# PRIMEIRA MENSAGEM
 # =========================================================
 
 def obter_primeira_mensagem_cliente(
@@ -372,7 +363,7 @@ def obter_primeira_mensagem_cliente(
 
 
 # =========================================================
-# RESUMO COMPLETO DA CONVERSA
+# CONVERSA COMPLETA
 # =========================================================
 
 def obter_conversa_para_observacoes(
@@ -405,6 +396,7 @@ def salvar_no_supabase(
 ):
 
     if chat_id in solicitacoes_salvas:
+
         print(
             "Solicitação já salva:",
             chat_id
@@ -427,6 +419,7 @@ def salvar_no_supabase(
     )
 
     registro = {
+
         "data": agora.strftime(
             "%d/%m/%Y %H:%M"
         ),
@@ -471,6 +464,11 @@ def salvar_no_supabase(
         ),
 
         "status": "Em revisão",
+
+        # NOVO:
+        # guarda a conversa do Telegram associada
+        # a este atendimento
+        "telegram_chat_id": str(chat_id),
     }
 
     resposta = (
@@ -489,13 +487,18 @@ def salvar_no_supabase(
     )
 
     print(
+        "Telegram Chat ID salvo:",
+        chat_id
+    )
+
+    print(
         "Resposta Supabase:",
         resposta.data
     )
 
 
 # =========================================================
-# PROCESSAR MENSAGEM
+# PROCESSAMENTO
 # =========================================================
 
 def processar_mensagem(
@@ -534,9 +537,6 @@ def processar_mensagem(
                 repr(erro)
             )
 
-            # Não expõe erro técnico ao cliente.
-            # A conversa continua preservada.
-
     return resposta_cliente
 
 
@@ -557,7 +557,7 @@ def iniciar_bot():
     )
 
     print(
-        "Modelo: Gemini 3.6 Flash"
+        "Telegram Chat ID: ATIVO"
     )
 
     print(
@@ -626,9 +626,9 @@ def iniciar_bot():
                     "Cliente",
                 )
 
-                # -----------------------------------------
+                # =========================================
                 # /START
-                # -----------------------------------------
+                # =========================================
 
                 if (
                     texto.strip().lower()
@@ -651,10 +651,6 @@ def iniciar_bot():
 
                     continue
 
-                # -----------------------------------------
-                # LOG
-                # -----------------------------------------
-
                 print(
                     "--------------------------------------"
                 )
@@ -673,10 +669,6 @@ def iniciar_bot():
                     "Mensagem:",
                     texto
                 )
-
-                # -----------------------------------------
-                # PROCESSAMENTO
-                # -----------------------------------------
 
                 try:
 
