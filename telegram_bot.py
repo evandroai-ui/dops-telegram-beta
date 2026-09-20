@@ -3,9 +3,10 @@ import time
 import requests
 from google import genai
 
-# =========================
+
+# =========================================================
 # CONFIGURAÇÕES
-# =========================
+# =========================================================
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -16,20 +17,26 @@ if not TELEGRAM_TOKEN:
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY não configurado.")
 
+
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Guarda temporariamente o histórico de cada cliente.
-# Depois vamos substituir isso pelo Supabase.
+
+# =========================================================
+# MEMÓRIA TEMPORÁRIA DAS CONVERSAS
+# Depois vamos substituir pelo Supabase
+# =========================================================
+
 conversas = {}
 
 
-# =========================
-# TELEGRAM
-# =========================
+# =========================================================
+# ENVIO DE MENSAGEM PELO TELEGRAM
+# =========================================================
 
 def enviar_mensagem(chat_id, texto):
+
     resposta = requests.post(
         f"{TELEGRAM_URL}/sendMessage",
         json={
@@ -42,92 +49,153 @@ def enviar_mensagem(chat_id, texto):
     resposta.raise_for_status()
 
 
-# =========================
-# INTELIGÊNCIA DO DOPS
-# =========================
+# =========================================================
+# ANÁLISE COM GEMINI
+# =========================================================
 
 def analisar_com_gemini(chat_id, nome, mensagem):
 
+    # Cria histórico para esse cliente
     if chat_id not in conversas:
         conversas[chat_id] = []
 
+    # Adiciona mensagem atual
     conversas[chat_id].append(
         f"Cliente: {mensagem}"
     )
 
+    # Mantém as últimas mensagens da conversa
     historico = "\n".join(
-        conversas[chat_id][-10:]
+        conversas[chat_id][-12:]
     )
 
     prompt = f"""
-Você é o assistente operacional DOPS.
+Você é o Assistente Operacional DOPS.
 
-Seu papel é ajudar um prestador de serviços a coletar
-e organizar as informações iniciais enviadas pelo cliente.
+Seu papel é ajudar um prestador de serviços a receber,
+entender e organizar as solicitações enviadas pelos clientes.
+
+Você está conversando diretamente com o cliente pelo Telegram.
 
 Nome do cliente:
 {nome}
 
-Histórico da conversa:
+HISTÓRICO DA CONVERSA:
+
 {historico}
 
-REGRAS IMPORTANTES:
+
+REGRAS OBRIGATÓRIAS:
 
 1. Responda sempre em português brasileiro.
 
-2. Fale diretamente com o cliente de forma simples,
-educada, natural e profissional.
+2. Fale diretamente com o cliente.
 
-3. Não invente informações.
+3. Use uma linguagem simples, natural, educada e profissional.
 
-4. Não invente preços.
+4. Não diga que você é Gemini, Google ou uma inteligência
+artificial.
 
-5. Não faça diagnóstico técnico definitivo.
+5. Não invente nenhuma informação.
 
-6. Não diga que determinado equipamento precisa ser
-substituído ou reparado sem avaliação do profissional.
+6. Não invente preços.
 
-7. Nunca tome decisões técnicas pelo profissional.
+7. Não determine valor de mão de obra.
 
-8. Se faltarem informações importantes para entender
-a solicitação, faça perguntas objetivas.
+8. Não forneça orçamento por conta própria.
 
-9. Faça no máximo 3 perguntas por mensagem.
+9. Não faça diagnóstico técnico definitivo.
 
-10. Não repita perguntas que o cliente já respondeu.
+10. Não determine que um equipamento precisa obrigatoriamente
+ser substituído ou reparado.
 
-11. Se já houver informações suficientes para o
-profissional avaliar a solicitação, diga ao cliente que
-as informações foram organizadas e serão encaminhadas
-ao profissional.
+11. Decisões técnicas e comerciais pertencem ao profissional.
 
-12. Não prometa prazo, preço ou disponibilidade.
+12. Seu objetivo inicial é entender o que o cliente precisa
+e coletar as informações necessárias para o profissional
+avaliar a solicitação.
 
-13. Seja breve. A resposta será enviada pelo Telegram.
+13. Quando faltarem informações importantes, faça perguntas
+objetivas.
 
-EXEMPLO:
+14. Faça no máximo 3 perguntas por mensagem.
+
+15. Nunca repita uma pergunta que o cliente já respondeu.
+
+16. Analise todo o histórico antes de perguntar novamente.
+
+17. Se o cliente responder apenas uma das perguntas,
+reconheça a informação e pergunte somente o que ainda estiver
+faltando.
+
+18. Não prometa prazo.
+
+19. Não prometa disponibilidade.
+
+20. Não prometa preço.
+
+21. Não diga que o serviço está confirmado.
+
+22. Não diga que o orçamento está aprovado.
+
+23. Quando já houver informações suficientes para o
+profissional analisar a solicitação, informe ao cliente que
+os dados foram organizados e serão encaminhados para análise
+do profissional.
+
+24. Seja breve. Evite textos muito longos.
+
+25. Não use linguagem excessivamente robótica.
+
+
+EXEMPLO DE CONVERSA:
 
 Cliente:
 "Quero trocar um chuveiro."
 
 Resposta adequada:
-"Certo! Para organizar sua solicitação, preciso de
-algumas informações:
+
+"Certo! Para organizar sua solicitação, preciso de algumas
+informações:
 
 1. Em qual bairro será o serviço?
 2. Você sabe se a instalação é 127V ou 220V?
 3. Você já possui o chuveiro novo?"
 
-Agora responda à última mensagem do cliente.
+
+Depois o cliente responde:
+
+"É no Centro, 220V e já tenho o chuveiro."
+
+
+Resposta adequada:
+
+"Perfeito! Já organizei essas informações.
+
+Vou encaminhar sua solicitação para análise do profissional."
+
+
+IMPORTANTE:
+
+Não copie exatamente os exemplos.
+Responda naturalmente de acordo com a conversa real.
+
+Agora responda somente à última mensagem do cliente.
 """
 
     resposta = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         contents=prompt
     )
 
+    if not resposta.text:
+        raise ValueError(
+            "Gemini não retornou uma resposta de texto."
+        )
+
     texto_resposta = resposta.text.strip()
 
+    # Salva também a resposta do DOPS no histórico
     conversas[chat_id].append(
         f"DOPS: {texto_resposta}"
     )
@@ -135,14 +203,17 @@ Agora responda à última mensagem do cliente.
     return texto_resposta
 
 
-# =========================
-# BOT
-# =========================
+# =========================================================
+# BOT PRINCIPAL
+# =========================================================
 
 def iniciar_bot():
 
+    print("======================================")
     print("DOPS Telegram + Gemini iniciado.")
+    print("Modelo: Gemini 3.6 Flash")
     print("Aguardando mensagens...")
+    print("======================================")
 
     offset = None
 
@@ -173,11 +244,13 @@ def iniciar_bot():
 
                 mensagem = update.get("message")
 
+                # Ignora eventos que não sejam mensagens
                 if not mensagem:
                     continue
 
                 texto = mensagem.get("text")
 
+                # Por enquanto trabalha apenas com texto
                 if not texto:
                     continue
 
@@ -190,8 +263,14 @@ def iniciar_bot():
                     "Cliente"
                 )
 
-                # Ignora o comando inicial do Telegram
-                if texto == "/start":
+                # =========================================
+                # COMANDO /START
+                # =========================================
+
+                if texto.strip().lower() == "/start":
+
+                    # Limpa conversa antiga ao reiniciar
+                    conversas[chat_id] = []
 
                     enviar_mensagem(
                         chat_id,
@@ -202,9 +281,18 @@ def iniciar_bot():
 
                     continue
 
-                print("-------------------------")
+                # =========================================
+                # MOSTRA NO LOG
+                # =========================================
+
+                print("--------------------------------------")
                 print("Cliente:", nome)
+                print("Chat ID:", chat_id)
                 print("Mensagem:", texto)
+
+                # =========================================
+                # GEMINI
+                # =========================================
 
                 try:
 
@@ -219,13 +307,14 @@ def iniciar_bot():
                         resposta_ia
                     )
 
-                    print("Resposta DOPS:", resposta_ia)
+                    print("Resposta DOPS:")
+                    print(resposta_ia)
 
                 except Exception as erro_ia:
 
                     print(
                         "Erro ao analisar com IA:",
-                        erro_ia
+                        repr(erro_ia)
                     )
 
                     enviar_mensagem(
@@ -235,12 +324,28 @@ def iniciar_bot():
                         "Tente novamente em alguns instantes."
                     )
 
-        except Exception as erro:
+        except requests.exceptions.HTTPError as erro_http:
 
-            print("Erro no Telegram:", erro)
+            print(
+                "Erro HTTP do Telegram:",
+                repr(erro_http)
+            )
 
             time.sleep(5)
 
+        except Exception as erro:
+
+            print(
+                "Erro geral do Telegram:",
+                repr(erro)
+            )
+
+            time.sleep(5)
+
+
+# =========================================================
+# INICIAR
+# =========================================================
 
 if __name__ == "__main__":
     iniciar_bot()
